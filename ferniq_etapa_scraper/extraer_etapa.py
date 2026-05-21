@@ -1,4 +1,5 @@
 import re
+import time
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -80,14 +81,24 @@ def slugify_filename(value: str) -> str:
     return cleaned.strip("_") or "archivo"
 
 
-def first_visible(locators: Iterable[Locator]) -> Locator:
-    for locator in locators:
-        try:
-            if locator.count() and locator.first.is_visible():
-                return locator.first
-        except Error:
-            continue
-    raise RuntimeError("No se encontro un locator visible.")
+def first_visible(
+    locators: Iterable[Locator],
+    description: str,
+    timeout_ms: int = 10000,
+) -> Locator:
+    locators = list(locators)
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+
+    while time.monotonic() < deadline:
+        for locator in locators:
+            try:
+                if locator.count() and locator.first.is_visible():
+                    return locator.first
+            except Error:
+                continue
+        time.sleep(0.25)
+
+    raise RuntimeError(f"No se encontro un locator visible para: {description}")
 
 
 def click_locator(locator: Locator, description: str) -> None:
@@ -117,7 +128,7 @@ def ensure_stage_tab(page: Page) -> None:
         page.get_by_text(re.compile(r"^Etapa$", re.I)),
         page.locator("text=Etapa"),
     ]
-    tab = first_visible(candidates)
+    tab = first_visible(candidates, "pestana Etapa")
     click_locator(tab, "Pestana Etapa")
     wait_for_dashboard_settle(page)
 
@@ -130,7 +141,7 @@ def get_comercial_trigger(page: Page) -> Locator:
         page.get_by_text(re.compile(r"^Comercial$", re.I)),
         page.locator("[placeholder*='Comercial' i]"),
     ]
-    return first_visible(candidates)
+    return first_visible(candidates, "selector Comercial")
 
 
 def open_comercial_popup(page: Page) -> Locator:
@@ -145,7 +156,7 @@ def open_comercial_popup(page: Page) -> Locator:
         page.locator(".mat-mdc-select-panel"),
     ]
 
-    popup = first_visible(popup_candidates)
+    popup = first_visible(popup_candidates, "popup de Comercial")
     popup.wait_for(state="visible", timeout=10000)
     return popup
 
@@ -193,7 +204,7 @@ def select_comercial(popup: Locator, comercial: str) -> None:
             popup.get_by_text(re.compile(rf"^{re.escape(candidate_name)}$", re.I)),
         ]
         try:
-            option = first_visible(candidates)
+            option = first_visible(candidates, f"comercial {candidate_name}", timeout_ms=5000)
             click_locator(option, f"Seleccionar comercial {comercial} ({candidate_name})")
             return
         except RuntimeError:
@@ -223,7 +234,7 @@ def confirm_popup(popup: Locator) -> None:
         popup.get_by_role("button", name=re.compile(r"^OK$", re.I)),
         popup.get_by_text(re.compile(r"^OK$", re.I)),
     ]
-    ok_button = first_visible(candidates)
+    ok_button = first_visible(candidates, "boton OK del popup")
     click_locator(ok_button, "Boton OK")
 
 
@@ -303,7 +314,7 @@ def try_extract_download(page: Page, comercial: str, extraction_date: str) -> li
     ]
 
     try:
-        download_button = first_visible(download_button_candidates)
+        download_button = first_visible(download_button_candidates, "boton Descargar", timeout_ms=5000)
     except RuntimeError:
         log("Boton Descargar no encontrado; se usara lectura DOM.")
         return []
@@ -728,6 +739,16 @@ def run_extraction(headless: bool = False) -> Path:
         return save_results([])
 
     return save_results(deduped)
+
+
+def run_extraction_with_retry() -> Path:
+    try:
+        log("Intentando extraccion en modo headless")
+        return run_extraction(headless=True)
+    except Exception as exc:
+        log(f"Fallo en modo headless: {exc}")
+        log("Reintentando extraccion en modo visible")
+        return run_extraction(headless=False)
 
 
 def main() -> None:

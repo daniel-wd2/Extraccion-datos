@@ -8,7 +8,7 @@ from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from config_utils import load_dotenv
-from extraer_etapa import OUTPUT_FILE, SESSION_FILE, load_results_dataframe, run_extraction
+from extraer_etapa import OUTPUT_FILE, SESSION_FILE, load_results_dataframe, run_extraction_with_retry
 
 
 ALLOWED_CHAT_ID = ""
@@ -115,7 +115,7 @@ async def handle_sacar_datos(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
         try:
-            excel_path = await asyncio.to_thread(run_extraction, True)
+            excel_path = await asyncio.to_thread(run_extraction_with_retry)
             df = await asyncio.to_thread(load_results_dataframe)
         except Exception as exc:
             await update.message.reply_text(f"Error al sacar datos: {exc}")
