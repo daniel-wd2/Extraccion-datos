@@ -55,6 +55,20 @@ El proyecto carga ese archivo automaticamente para `guardar_sesion.py` y `telegr
 
 `guardar_sesion.py` abre Chromium visible y guarda la sesion en `sesion_ferniq.json`.
 
+Ahora abre primero la URL de login:
+
+```text
+https://ferniq.fernfutures.com/
+```
+
+y despues navega a la URL objetivo:
+
+```text
+https://ferniq.fernfutures.com/app/opportunity-flow/stage
+```
+
+Si Brave esta instalado en una ruta comun de Windows, intentara abrir Brave. Si no lo encuentra, usara Chromium de Playwright.
+
 Modo manual:
 
 ```bash
@@ -82,6 +96,13 @@ python guardar_sesion.py
 ```
 
 El script intentara detectar los campos de usuario, password y envio. Si no puede completar el login, caera a modo manual.
+
+Si Brave no esta en una ruta estandar, puedes indicar su ejecutable con:
+
+```powershell
+$env:BRAVE_EXECUTABLE="C:\ruta\a\brave.exe"
+python guardar_sesion.py
+```
 
 ## 2. Extraer datos de Etapa manualmente
 

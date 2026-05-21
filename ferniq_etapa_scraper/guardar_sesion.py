@@ -8,8 +8,15 @@ from playwright.sync_api import Error, Locator, Page, TimeoutError, sync_playwri
 from config_utils import load_dotenv
 
 
-URL = "https://ferniq.fernfutures.com/app/opportunity-flow/stage"
+LOGIN_URL = "https://ferniq.fernfutures.com/"
+TARGET_URL = "https://ferniq.fernfutures.com/app/opportunity-flow/stage"
 SESSION_FILE = Path(__file__).resolve().parent / "sesion_ferniq.json"
+BRAVE_CANDIDATES = [
+    Path(os.getenv("BRAVE_EXECUTABLE", "")).expanduser() if os.getenv("BRAVE_EXECUTABLE") else None,
+    Path(r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"),
+    Path(r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe"),
+    Path(os.getenv("LOCALAPPDATA", "")) / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe",
+]
 DASHBOARD_MARKERS = [
     re.compile(r"FO\s*-\s*Etapa", re.I),
     re.compile(r"Etapa", re.I),
@@ -51,6 +58,21 @@ def wait_for_dashboard(page: Page, timeout_ms: int = 20000) -> bool:
     return is_dashboard_ready(page)
 
 
+def get_brave_path() -> Path | None:
+    for candidate in BRAVE_CANDIDATES:
+        if candidate and candidate.exists():
+            return candidate
+    return None
+
+
+def open_target_dashboard(page: Page) -> bool:
+    try:
+        page.goto(TARGET_URL, wait_until="domcontentloaded")
+    except TimeoutError:
+        pass
+    return wait_for_dashboard(page, timeout_ms=30000)
+
+
 def try_auto_login(page: Page, email: str, password: str) -> bool:
     print("Intentando login automatico con variables de entorno...")
 
@@ -81,7 +103,7 @@ def try_auto_login(page: Page, email: str, password: str) -> bool:
         submit = first_visible(*submit_candidates)
         submit.click(timeout=10000)
 
-        if wait_for_dashboard(page, timeout_ms=30000):
+        if wait_for_dashboard(page, timeout_ms=10000) or open_target_dashboard(page):
             print("Login automatico completado.")
             return True
     except Exception as exc:
@@ -94,16 +116,26 @@ def main() -> None:
     load_dotenv()
     email = os.getenv("FERNIQ_EMAIL", "").strip()
     password = os.getenv("FERNIQ_PASSWORD", "").strip()
+    brave_path = get_brave_path()
 
-    print("Abriendo Chromium...")
-    print(f"URL: {URL}")
+    if brave_path:
+        print(f"Abriendo Brave: {brave_path}")
+    else:
+        print("Brave no encontrado. Se abrira Chromium de Playwright.")
+
+    print(f"Login URL: {LOGIN_URL}")
+    print(f"URL destino: {TARGET_URL}")
     print(f"Sesion destino: {SESSION_FILE}")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        launch_kwargs = {"headless": False}
+        if brave_path:
+            launch_kwargs["executable_path"] = str(brave_path)
+
+        browser = p.chromium.launch(**launch_kwargs)
         context = browser.new_context()
         page = context.new_page()
-        page.goto(URL, wait_until="domcontentloaded")
+        page.goto(LOGIN_URL, wait_until="domcontentloaded")
 
         auto_login_ok = False
         if email and password and not is_dashboard_ready(page):
@@ -111,10 +143,10 @@ def main() -> None:
 
         if not auto_login_ok and not is_dashboard_ready(page):
             print("Inicia sesion manualmente en la ventana del navegador.")
-            print("Cuando veas el dashboard listo, vuelve a esta consola y pulsa ENTER.")
+            print("Cuando termines el login, el script abrira la URL destino y guardara la sesion.")
             input("Pulsa ENTER para continuar... ")
 
-        wait_for_dashboard(page, timeout_ms=10000)
+        open_target_dashboard(page)
         context.storage_state(path=str(SESSION_FILE))
         print(f"Sesion guardada en: {SESSION_FILE}")
         browser.close()
