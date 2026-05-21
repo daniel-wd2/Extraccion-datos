@@ -143,6 +143,8 @@ COMERCIALES = [
 MES = "Mayo 2026"
 ```
 
+Nota: si el usuario autenticado es `Agustin Parejo` y en el selector aparece `Mi usuario`, el script ya contempla ese alias automaticamente.
+
 ## Si la sesion caduca
 
 Si al ejecutar `extraer_etapa.py` o el bot de Telegram la web redirige al login o ya no carga el dashboard correctamente:

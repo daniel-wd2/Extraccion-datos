@@ -57,6 +57,10 @@ EMPTY_COLUMNS = [
     "origen",
 ]
 
+COMERCIAL_ALIASES = {
+    "agustin parejo": ["Mi usuario"],
+}
+
 
 def log(message: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
@@ -180,21 +184,24 @@ def uncheck_all_selected(popup: Locator) -> None:
 
 
 def select_comercial(popup: Locator, comercial: str) -> None:
-    candidates = [
-        popup.get_by_role("checkbox", name=re.compile(rf"^{re.escape(comercial)}$", re.I)),
-        popup.get_by_label(re.compile(rf"^{re.escape(comercial)}$", re.I)),
-        popup.get_by_text(re.compile(rf"^{re.escape(comercial)}$", re.I)),
-    ]
-    try:
-        option = first_visible(candidates)
-        click_locator(option, f"Seleccionar comercial {comercial}")
-        return
-    except RuntimeError:
-        pass
+    candidate_names = [comercial, *COMERCIAL_ALIASES.get(normalize_text(comercial), [])]
+
+    for candidate_name in candidate_names:
+        candidates = [
+            popup.get_by_role("checkbox", name=re.compile(rf"^{re.escape(candidate_name)}$", re.I)),
+            popup.get_by_label(re.compile(rf"^{re.escape(candidate_name)}$", re.I)),
+            popup.get_by_text(re.compile(rf"^{re.escape(candidate_name)}$", re.I)),
+        ]
+        try:
+            option = first_visible(candidates)
+            click_locator(option, f"Seleccionar comercial {comercial} ({candidate_name})")
+            return
+        except RuntimeError:
+            pass
 
     checkbox_like = popup.locator("label, [role='checkbox'], .mat-checkbox, .mdc-form-field")
     total = checkbox_like.count()
-    target = normalize_text(comercial)
+    target_names = {normalize_text(name) for name in candidate_names}
 
     for index in range(total):
         option = checkbox_like.nth(index)
@@ -202,12 +209,13 @@ def select_comercial(popup: Locator, comercial: str) -> None:
             text = option.inner_text(timeout=1000)
         except Error:
             continue
-        if normalize_text(text) != target:
+        if normalize_text(text) not in target_names:
             continue
         click_locator(option, f"Seleccionar comercial {comercial}")
         return
 
-    raise RuntimeError(f"No se encontro el comercial '{comercial}' en el popup.")
+    alias_text = ", ".join(candidate_names)
+    raise RuntimeError(f"No se encontro el comercial '{comercial}' en el popup. Alias probados: {alias_text}")
 
 
 def confirm_popup(popup: Locator) -> None:
