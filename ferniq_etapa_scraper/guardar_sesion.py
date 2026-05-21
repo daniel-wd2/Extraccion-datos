@@ -5,6 +5,8 @@ from pathlib import Path
 
 from playwright.sync_api import Error, Locator, Page, TimeoutError, sync_playwright
 
+from config_utils import load_dotenv
+
 
 URL = "https://ferniq.fernfutures.com/app/opportunity-flow/stage"
 SESSION_FILE = Path(__file__).resolve().parent / "sesion_ferniq.json"
@@ -89,6 +91,7 @@ def try_auto_login(page: Page, email: str, password: str) -> bool:
 
 
 def main() -> None:
+    load_dotenv()
     email = os.getenv("FERNIQ_EMAIL", "").strip()
     password = os.getenv("FERNIQ_PASSWORD", "").strip()
 

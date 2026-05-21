@@ -7,11 +7,11 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+from config_utils import load_dotenv
 from extraer_etapa import load_results_dataframe, run_extraction
 
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-ALLOWED_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_CHAT_ID", "").strip()
+ALLOWED_CHAT_ID = ""
 TRIGGER_TEXTS = {"sacar datos", "/sacar_datos"}
 
 RUN_LOCK = asyncio.Lock()
@@ -162,10 +162,16 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 def main() -> None:
-    if not BOT_TOKEN:
+    load_dotenv()
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+
+    if not bot_token:
         raise RuntimeError("Falta TELEGRAM_BOT_TOKEN en las variables de entorno.")
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    global ALLOWED_CHAT_ID
+    ALLOWED_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_CHAT_ID", "").strip()
+
+    application = Application.builder().token(bot_token).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("sacar_datos", handle_sacar_datos))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))

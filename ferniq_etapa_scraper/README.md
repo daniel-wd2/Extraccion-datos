@@ -6,6 +6,8 @@ Scraper en Python con Playwright para extraer los datos visibles de la pestana `
 
 ```text
 ferniq_etapa_scraper/
+|- .env.example
+|- config_utils.py
 |- guardar_sesion.py
 |- extraer_etapa.py
 |- telegram_bot.py
@@ -32,6 +34,21 @@ Instala el navegador de Playwright:
 ```bash
 playwright install
 ```
+
+## Configuracion opcional con .env
+
+Puedes crear un archivo `.env` dentro de `ferniq_etapa_scraper` a partir de `.env.example`.
+
+Ejemplo:
+
+```env
+FERNIQ_EMAIL=
+FERNIQ_PASSWORD=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ALLOWED_CHAT_ID=
+```
+
+El proyecto carga ese archivo automaticamente para `guardar_sesion.py` y `telegram_bot.py`.
 
 ## 1. Guardar sesion
 
@@ -103,6 +120,12 @@ python telegram_bot.py
 ```
 
 `TELEGRAM_ALLOWED_CHAT_ID` es opcional, pero recomendable para que solo responda en tu chat.
+
+Si usas `.env`, basta con:
+
+```bash
+python telegram_bot.py
+```
 
 ### Comandos y mensajes soportados
 
