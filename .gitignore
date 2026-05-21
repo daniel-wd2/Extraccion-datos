@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+ferniq_etapa_scraper/sesion_ferniq.json
+ferniq_etapa_scraper/exports/
+ferniq_etapa_scraper/resultado_etapa_ferniq.xlsx
