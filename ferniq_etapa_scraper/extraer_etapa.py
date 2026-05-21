@@ -20,7 +20,7 @@ COMERCIALES = [
     "Jesus Cabello",
     "Miguel Angel Haro",
     "Paco Buendia",
-    "Francisco Javier Alba",
+    "Agustin Parejo",
     "Ramón Jimenez",
 ]
 
