@@ -8,6 +8,7 @@ Scraper en Python con Playwright para extraer los datos visibles de la pestana `
 ferniq_etapa_scraper/
 |- .env.example
 |- config_utils.py
+|- iniciar_todo.py
 |- guardar_sesion.py
 |- extraer_etapa.py
 |- telegram_bot.py
@@ -127,11 +128,31 @@ Si usas `.env`, basta con:
 python telegram_bot.py
 ```
 
+## 4. Arrancar todo con un solo comando
+
+Si quieres levantarlo todo de una vez:
+
+```bash
+python iniciar_todo.py
+```
+
+Este script hace lo siguiente:
+
+1. Si no existe `sesion_ferniq.json`, ejecuta `guardar_sesion.py`
+2. Cuando la sesion ya existe, arranca el bot de Telegram
+
+Si ya tienes la sesion guardada, ira directamente al bot.
+
 ### Comandos y mensajes soportados
 
 - `/start`
+- `/ayuda`
 - `/sacar_datos`
+- `/estado`
+- `/ultimo_excel`
 - `sacar datos`
+- `estado`
+- `ultimo excel`
 
 Cuando envias `sacar datos`, el bot:
 
@@ -139,6 +160,15 @@ Cuando envias `sacar datos`, el bot:
 2. Genera o regenera `resultado_etapa_ferniq.xlsx`
 3. Lee el Excel
 4. Te envia el resumen y el archivo
+
+Cuando envias `/estado` o `estado`, el bot te dice:
+
+- si existe `sesion_ferniq.json`
+- si existe `resultado_etapa_ferniq.xlsx`
+- si el token esta cargado
+- que chat tiene permitido
+
+Cuando envias `/ultimo_excel` o `ultimo excel`, el bot te manda el ultimo Excel disponible sin volver a scrapear.
 
 ## Exportaciones intermedias
 

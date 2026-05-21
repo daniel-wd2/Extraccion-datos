@@ -8,11 +8,11 @@ from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from config_utils import load_dotenv
-from extraer_etapa import load_results_dataframe, run_extraction
+from extraer_etapa import OUTPUT_FILE, SESSION_FILE, load_results_dataframe, run_extraction
 
 
 ALLOWED_CHAT_ID = ""
-TRIGGER_TEXTS = {"sacar datos", "/sacar_datos"}
+TRIGGER_TEXTS = {"sacar datos", "/sacar_datos", "estado", "ultimo excel"}
 
 RUN_LOCK = asyncio.Lock()
 
@@ -89,6 +89,21 @@ async def send_excel(update: Update, excel_path: Path) -> None:
         )
 
 
+def build_status_message() -> str:
+    session_ok = "si" if SESSION_FILE.exists() else "no"
+    excel_ok = "si" if OUTPUT_FILE.exists() else "no"
+    token_ok = "si" if os.getenv("TELEGRAM_BOT_TOKEN", "").strip() else "no"
+    allowed_chat = ALLOWED_CHAT_ID or "sin restriccion"
+
+    return (
+        "Estado del bot:\n"
+        f"- sesion_ferniq.json: {session_ok}\n"
+        f"- resultado_etapa_ferniq.xlsx: {excel_ok}\n"
+        f"- token cargado: {token_ok}\n"
+        f"- chat permitido: {allowed_chat}"
+    )
+
+
 async def handle_sacar_datos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not await ensure_authorized(update):
         return
@@ -112,6 +127,42 @@ async def handle_sacar_datos(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(chunk)
 
         await send_excel(update, excel_path)
+
+
+async def handle_estado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not await ensure_authorized(update):
+        return
+    await update.message.reply_text(build_status_message())
+
+
+async def handle_ultimo_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not await ensure_authorized(update):
+        return
+
+    if not OUTPUT_FILE.exists():
+        await update.message.reply_text("Todavia no existe ningun Excel generado.")
+        return
+
+    await update.message.reply_text("Te envio el ultimo Excel generado.")
+    await send_excel(update, OUTPUT_FILE)
+
+
+async def handle_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not await ensure_authorized(update):
+        return
+
+    await update.message.reply_text(
+        "Comandos disponibles:\n"
+        "/start\n"
+        "/sacar_datos\n"
+        "/estado\n"
+        "/ultimo_excel\n"
+        "/ayuda\n\n"
+        "Tambien puedes escribir:\n"
+        "- sacar datos\n"
+        "- estado\n"
+        "- ultimo excel"
+    )
 
 
 def split_message(text: str, limit: int = 3500) -> list[str]:
@@ -142,7 +193,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not await ensure_authorized(update):
         return
     await update.message.reply_text(
-        "Bot listo. Escribe 'sacar datos' para ejecutar el scraper y recibir el Excel."
+        "Bot listo. Usa /ayuda para ver comandos o escribe 'sacar datos'."
     )
 
 
@@ -151,14 +202,20 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     normalized = update.message.text.strip().lower()
-    if normalized in TRIGGER_TEXTS:
+    if normalized in {"sacar datos", "/sacar_datos"}:
         await handle_sacar_datos(update, context)
+        return
+    if normalized == "estado":
+        await handle_estado(update, context)
+        return
+    if normalized == "ultimo excel":
+        await handle_ultimo_excel(update, context)
         return
 
     if not await ensure_authorized(update):
         return
 
-    await update.message.reply_text("No te he entendido. Prueba con 'sacar datos'.")
+    await update.message.reply_text("No te he entendido. Usa /ayuda para ver los comandos.")
 
 
 def main() -> None:
@@ -173,7 +230,10 @@ def main() -> None:
 
     application = Application.builder().token(bot_token).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("ayuda", handle_ayuda))
     application.add_handler(CommandHandler("sacar_datos", handle_sacar_datos))
+    application.add_handler(CommandHandler("estado", handle_estado))
+    application.add_handler(CommandHandler("ultimo_excel", handle_ultimo_excel))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
     application.run_polling()
 
