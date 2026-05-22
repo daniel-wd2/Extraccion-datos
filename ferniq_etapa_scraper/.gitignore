@@ -1,0 +1,8 @@
+.env
+__pycache__/
+.ferniq_browser_profile/
+exports/
+sesion_ferniq.json
+sesion_ferniq_session_storage.json
+telegram_bot_stdout*.log
+telegram_bot_stderr*.log

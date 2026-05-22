@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 import pandas as pd
-from telegram import Update
+from telegram import BotCommand, MenuButtonCommands, Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -11,16 +11,16 @@ from config_utils import load_dotenv
 from extraer_etapa import OUTPUT_FILE, SESSION_FILE, load_results_dataframe, run_extraction_with_retry
 
 
-ALLOWED_CHAT_ID = ""
+ALLOWED_CHAT_IDS: set[str] = set()
 TRIGGER_TEXTS = {"sacar datos", "/sacar_datos", "estado", "ultimo excel"}
 
 RUN_LOCK = asyncio.Lock()
 
 
 def is_allowed_chat(chat_id: int) -> bool:
-    if not ALLOWED_CHAT_ID:
+    if not ALLOWED_CHAT_IDS:
         return True
-    return str(chat_id) == ALLOWED_CHAT_ID
+    return str(chat_id) in ALLOWED_CHAT_IDS
 
 
 def format_money(value: float | int | None) -> str:
@@ -74,7 +74,10 @@ async def ensure_authorized(update: Update) -> bool:
     if is_allowed_chat(chat.id):
         return True
     if update.message:
-        await update.message.reply_text("Este chat no esta autorizado para usar este bot.")
+        await update.message.reply_text(
+            "Este chat no esta autorizado para usar este bot. "
+            f"Tu chat_id es: {chat.id}"
+        )
     return False
 
 
@@ -93,7 +96,7 @@ def build_status_message() -> str:
     session_ok = "si" if SESSION_FILE.exists() else "no"
     excel_ok = "si" if OUTPUT_FILE.exists() else "no"
     token_ok = "si" if os.getenv("TELEGRAM_BOT_TOKEN", "").strip() else "no"
-    allowed_chat = ALLOWED_CHAT_ID or "sin restriccion"
+    allowed_chat = ", ".join(sorted(ALLOWED_CHAT_IDS)) if ALLOWED_CHAT_IDS else "sin restriccion"
 
     return (
         "Estado del bot:\n"
@@ -112,7 +115,7 @@ async def handle_sacar_datos(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             "Voy a sacar los datos de todos los comerciales. Esto puede tardar un poco."
         )
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING) # type: ignore
 
         try:
             excel_path = await asyncio.to_thread(run_extraction_with_retry)
@@ -193,7 +196,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not await ensure_authorized(update):
         return
     await update.message.reply_text(
-        "Bot listo. Usa /ayuda para ver comandos o escribe 'sacar datos'."
+        "Bot listo. Usa el menu de comandos de Telegram o escribe /ayuda."
     )
 
 
@@ -201,7 +204,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not update.message:
         return
 
-    normalized = update.message.text.strip().lower()
+    normalized = update.message.text.strip().lower() # type: ignore
     if normalized in {"sacar datos", "/sacar_datos"}:
         await handle_sacar_datos(update, context)
         return
@@ -218,6 +221,18 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text("No te he entendido. Usa /ayuda para ver los comandos.")
 
 
+async def post_init(application: Application) -> None:
+    commands = [
+        BotCommand("start", "Abrir el bot"),
+        BotCommand("sacar_datos", "Extraer datos y generar el Excel"),
+        BotCommand("estado", "Ver estado del bot y de la sesion"),
+        BotCommand("ultimo_excel", "Recibir el ultimo Excel generado"),
+        BotCommand("ayuda", "Ver ayuda y comandos disponibles"),
+    ]
+    await application.bot.set_my_commands(commands)
+    await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+
 def main() -> None:
     load_dotenv()
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -225,16 +240,25 @@ def main() -> None:
     if not bot_token:
         raise RuntimeError("Falta TELEGRAM_BOT_TOKEN en las variables de entorno.")
 
-    global ALLOWED_CHAT_ID
-    ALLOWED_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_CHAT_ID", "").strip()
+    global ALLOWED_CHAT_IDS
+    raw_allowed_chat_ids = os.getenv("TELEGRAM_ALLOWED_CHAT_ID", "").strip()
+    ALLOWED_CHAT_IDS = {
+        chat_id.strip()
+        for chat_id in raw_allowed_chat_ids.split(",")
+        if chat_id.strip()
+    }
 
-    application = Application.builder().token(bot_token).build()
+    application = Application.builder().token(bot_token).post_init(post_init).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("ayuda", handle_ayuda))
     application.add_handler(CommandHandler("sacar_datos", handle_sacar_datos))
     application.add_handler(CommandHandler("estado", handle_estado))
     application.add_handler(CommandHandler("ultimo_excel", handle_ultimo_excel))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
+    print("Bot de Telegram iniciado.")
+    print(f"Sesion guardada disponible: {'si' if SESSION_FILE.exists() else 'no'}")
+    print(f"Chat permitido: {', '.join(sorted(ALLOWED_CHAT_IDS)) if ALLOWED_CHAT_IDS else 'sin restriccion'}")
+    print("Esperando mensajes en Telegram...")
     application.run_polling()
 
 
