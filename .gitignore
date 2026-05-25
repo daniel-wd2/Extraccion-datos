@@ -6,6 +6,3 @@ __pycache__/
 .ferniq_browser_profile/
 sesion_ferniq.json
 sesion_ferniq_session_storage.json
-exports/
-resultado_etapa_ferniq.xlsx
-telegram_bot_*.log
