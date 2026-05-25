@@ -203,37 +203,11 @@ async def post_init(application: Application) -> None:
 
 
 def main() -> None:
-    load_dotenv()
-    bot_token = os.getenv("TELEGRAM_FORECAST_BOT_TOKEN", "").strip()
-    if not bot_token:
-        bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-
-    if not bot_token:
-        raise RuntimeError("Falta TELEGRAM_FORECAST_BOT_TOKEN o TELEGRAM_BOT_TOKEN en las variables de entorno.")
-
-    global ALLOWED_CHAT_IDS
-    raw_allowed_chat_ids = os.getenv("TELEGRAM_FORECAST_ALLOWED_CHAT_ID", "").strip()
-    if not raw_allowed_chat_ids:
-        raw_allowed_chat_ids = os.getenv("TELEGRAM_ALLOWED_CHAT_ID", "").strip()
-
-    ALLOWED_CHAT_IDS = {
-        chat_id.strip()
-        for chat_id in raw_allowed_chat_ids.split(",")
-        if chat_id.strip()
-    }
-
-    application = Application.builder().token(bot_token).post_init(post_init).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("ayuda_forecast", handle_ayuda))
-    application.add_handler(CommandHandler("sacar_forecast", handle_sacar_forecast))
-    application.add_handler(CommandHandler("estado_forecast", handle_estado))
-    application.add_handler(CommandHandler("ultimo_forecast", handle_ultimo_reporte))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
-    print("Bot de Telegram de Forecast iniciado.")
-    print(f"Sesion guardada disponible: {'si' if SESSION_FILE.exists() else 'no'}")
-    print(f"Chat permitido: {', '.join(sorted(ALLOWED_CHAT_IDS)) if ALLOWED_CHAT_IDS else 'sin restriccion'}")
-    print("Esperando mensajes en Telegram...")
-    application.run_polling()
+    raise RuntimeError(
+        "telegram_forecast_bot.py ya no debe arrancarse por separado. "
+        "Forecast forma parte del bot principal en "
+        "ferniq_oportunidad_scraper\\telegram_bot.py."
+    )
 
 
 if __name__ == "__main__":

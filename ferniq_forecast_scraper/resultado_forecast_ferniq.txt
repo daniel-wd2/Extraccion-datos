@@ -1,16 +1,16 @@
-Ismael Serrano: 246273,49
-Javier Barcelo: 330086,22
-Jesus Cabello: 75088,16
-Miguel Angel Haro: 145172,72
-Paco Buendia: 291390,80
-Agustin Parejo: 90357,53
+Ismael Serrano: 243918,49
+Javier Barcelo: 326776,39
+Jesus Cabello: 65995,51
+Miguel Angel Haro: 144721,51
+Paco Buendia: 272485,96
+Agustin Parejo: 92102,39
 Ramón Jimenez: 30442,61
 Daniel Amparán: 0,00
-Antonio Muñoz: 306915,32
-Antonio Jose Jimenez: 324601,88
-Clientes Telefónicos: 25541,11
+Antonio Muñoz: 295994,59
+Antonio Jose Jimenez: 316948,60
+Clientes Telefónicos: 24519,06
 Javier Alba: 1470,00
-Jesús Alba: 275206,91
+Jesús Alba: 278478,90
 Jose Manuel Trujillo Lopez: 58537,13
-Jose Ruz Gomez: 78485,11
+Jose Ruz Gomez: 77014,01
 Vanesa Parejo: 0,00

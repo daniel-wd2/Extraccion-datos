@@ -312,10 +312,26 @@ def save_session(allow_manual: bool = True, headless: bool = False) -> None:
         if profile_directory:
             launch_kwargs["args"] = [f"--profile-directory={profile_directory}"]
 
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(user_data_dir),
-            **launch_kwargs,
-        )
+        try:
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=str(user_data_dir),
+                **launch_kwargs,
+            )
+        except Exception:
+            if not use_system_chrome_profile():
+                raise
+
+            fallback_dir = PERSISTENT_PROFILE_DIR
+            fallback_kwargs = dict(launch_kwargs)
+            fallback_kwargs.pop("args", None)
+            print(
+                "No se pudo abrir el perfil de Chrome en uso. "
+                f"Reintentando con un perfil dedicado: {fallback_dir}"
+            )
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=str(fallback_dir),
+                **fallback_kwargs,
+            )
         page = context.pages[0] if context.pages else context.new_page()
         open_login_page(page)
 
