@@ -1,0 +1,50 @@
+comercial;mes;etapa;cantidad;valor_texto;precio;fecha_extraccion;origen
+Agustín Parejo;Mayo 2026;Aceptado;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Agustín Parejo;Mayo 2026;Anulado / Perdido;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Agustín Parejo;Mayo 2026;Contacto inicial;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Agustín Parejo;Mayo 2026;Envio de presupuesto;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Agustín Parejo;Mayo 2026;Negociacion;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Agustín Parejo;Mayo 2026;Oportunidad de valor;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Agustín Parejo;Mayo 2026;Por confirmar / Sin respuesta;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Agustín Parejo;Mayo 2026;Proceso de compras;;€20,575.00;20575.0;2026-05-25 13:25:40;dom_chart_click
+Ismael Serrano;Mayo 2026;Aceptado;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ismael Serrano;Mayo 2026;Anulado / Perdido;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ismael Serrano;Mayo 2026;Contacto inicial;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ismael Serrano;Mayo 2026;Envio de presupuesto;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ismael Serrano;Mayo 2026;Negociacion;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ismael Serrano;Mayo 2026;Oportunidad de valor;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ismael Serrano;Mayo 2026;Por confirmar / Sin respuesta;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ismael Serrano;Mayo 2026;Proceso de compras;;€7,500.00;7500.0;2026-05-25 13:25:40;dom_chart_click
+Javier Barceló;Mayo 2026;Aceptado;;€3,000.00;3000.0;2026-05-25 13:25:40;dom_chart_click
+Javier Barceló;Mayo 2026;Anulado / Perdido;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Javier Barceló;Mayo 2026;Contacto inicial;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Javier Barceló;Mayo 2026;Envio de presupuesto;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Javier Barceló;Mayo 2026;Negociacion;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Javier Barceló;Mayo 2026;Oportunidad de valor;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Javier Barceló;Mayo 2026;Por confirmar / Sin respuesta;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Javier Barceló;Mayo 2026;Proceso de compras;;€9,000.00;9000.0;2026-05-25 13:25:40;dom_chart_click
+Jesús Cabello;Mayo 2026;Proceso de compras;;€0.00;0.0;2026-05-25 13:25:40;dom
+Miguel Ángel Haro;Mayo 2026;Aceptado;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Miguel Ángel Haro;Mayo 2026;Anulado / Perdido;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Miguel Ángel Haro;Mayo 2026;Contacto inicial;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Miguel Ángel Haro;Mayo 2026;Envio de presupuesto;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Miguel Ángel Haro;Mayo 2026;Negociacion;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Miguel Ángel Haro;Mayo 2026;Oportunidad de valor;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Miguel Ángel Haro;Mayo 2026;Por confirmar / Sin respuesta;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Miguel Ángel Haro;Mayo 2026;Proceso de compras;;€3,499.00;3499.0;2026-05-25 13:25:40;dom_chart_click
+Paco Buendía;Mayo 2026;Aceptado;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Paco Buendía;Mayo 2026;Anulado / Perdido;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Paco Buendía;Mayo 2026;Contacto inicial;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Paco Buendía;Mayo 2026;Envio de presupuesto;;€11,999.00;11999.0;2026-05-25 13:25:40;dom_chart_click
+Paco Buendía;Mayo 2026;Negociacion;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Paco Buendía;Mayo 2026;Oportunidad de valor;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Paco Buendía;Mayo 2026;Por confirmar / Sin respuesta;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Paco Buendía;Mayo 2026;Proceso de compras;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ramón Jiménez;Mayo 2026;Aceptado;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ramón Jiménez;Mayo 2026;Anulado / Perdido;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ramón Jiménez;Mayo 2026;Contacto inicial;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ramón Jiménez;Mayo 2026;Envio de presupuesto;;€1.00;1.0;2026-05-25 13:25:40;dom_chart_click
+Ramón Jiménez;Mayo 2026;Negociacion;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ramón Jiménez;Mayo 2026;Oportunidad de valor;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ramón Jiménez;Mayo 2026;Por confirmar / Sin respuesta;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
+Ramón Jiménez;Mayo 2026;Proceso de compras;;€0.00;0.0;2026-05-25 13:25:40;dom_chart_click
