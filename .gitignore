@@ -3,6 +3,9 @@ __pycache__/
 *.pyo
 *.pyd
 .env
-ferniq_etapa_scraper/sesion_ferniq.json
-ferniq_etapa_scraper/exports/
-ferniq_etapa_scraper/resultado_etapa_ferniq.xlsx
+.ferniq_browser_profile/
+sesion_ferniq.json
+sesion_ferniq_session_storage.json
+exports/
+resultado_etapa_ferniq.xlsx
+telegram_bot_*.log
