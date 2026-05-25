@@ -1,11 +1,15 @@
 import asyncio
+import atexit
+import msvcrt
 import os
-import subprocess
+import re
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
 from telegram import BotCommand, MenuButtonCommands, Update
+from telegram.error import BadRequest, TimedOut
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -15,6 +19,7 @@ from extraer_etapa import OUTPUT_FILE, SESSION_FILE, load_results_dataframe, run
 
 ALLOWED_CHAT_IDS: set[str] = set()
 BASE_DIR = Path(__file__).resolve().parent
+LOCK_FILE = BASE_DIR / ".telegram_bot.lock"
 FORECAST_DIR = BASE_DIR.parent / "ferniq_forecast_scraper"
 FORECAST_OUTPUT_FILE = FORECAST_DIR / "resultado_forecast_ferniq.txt"
 FORECAST_SESSION_FILE = FORECAST_DIR / "sesion_forecast.json"
@@ -34,6 +39,50 @@ FORECAST_OVERRIDE_ENV_KEYS = {
 }
 
 RUN_LOCK = asyncio.Lock()
+LOCK_HANDLE = None
+CURRENT_JOB_LABEL = ""
+
+
+def acquire_single_instance_lock() -> None:
+    global LOCK_HANDLE
+
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_handle = LOCK_FILE.open("a+")
+
+    try:
+        msvcrt.locking(lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        lock_handle.close()
+        raise RuntimeError(
+            "Ya hay otra instancia del bot de Telegram ejecutandose en este equipo."
+        )
+
+    lock_handle.seek(0)
+    lock_handle.truncate()
+    lock_handle.write(str(os.getpid()))
+    lock_handle.flush()
+    LOCK_HANDLE = lock_handle
+
+
+def release_single_instance_lock() -> None:
+    global LOCK_HANDLE
+
+    if LOCK_HANDLE is None:
+        return
+
+    try:
+        LOCK_HANDLE.seek(0)
+        LOCK_HANDLE.truncate()
+        LOCK_HANDLE.flush()
+        msvcrt.locking(LOCK_HANDLE.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+    finally:
+        LOCK_HANDLE.close()
+        LOCK_HANDLE = None
+
+
+atexit.register(release_single_instance_lock)
 
 
 def is_allowed_chat(chat_id: int) -> bool:
@@ -108,6 +157,9 @@ async def send_excel(update: Update, excel_path: Path) -> None:
             document=excel_file,
             filename=excel_path.name,
             caption="Excel generado por el scraper de Ferniq.",
+            read_timeout=120,
+            write_timeout=120,
+            connect_timeout=30,
         )
 
 
@@ -119,6 +171,9 @@ async def send_report(update: Update, report_path: Path) -> None:
             document=report_file,
             filename=report_path.name,
             caption="Reporte de Forecast generado por Ferniq.",
+            read_timeout=120,
+            write_timeout=120,
+            connect_timeout=30,
         )
 
 
@@ -141,6 +196,14 @@ def build_status_message() -> str:
     )
 
 
+def format_elapsed_seconds(started_at: float) -> str:
+    elapsed = max(0, int(time.monotonic() - started_at))
+    minutes, seconds = divmod(elapsed, 60)
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
 def build_forecast_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
     for key in FORECAST_OVERRIDE_ENV_KEYS:
@@ -148,7 +211,270 @@ def build_forecast_subprocess_env() -> dict[str, str]:
     return env
 
 
-def run_forecast_extraction_subprocess() -> Path:
+def parse_simple_env_file(env_path: Path) -> dict[str, str]:
+    if not env_path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip().lstrip("\ufeff")] = value.strip().strip('"').strip("'")
+    return values
+
+
+def get_forecast_missing_credentials() -> list[str]:
+    env_values = parse_simple_env_file(FORECAST_ENV_FILE)
+    email = env_values.get("FERNIQ_FORECAST_EMAIL") or env_values.get("FERNIQ_EMAIL") or ""
+    password = env_values.get("FERNIQ_FORECAST_PASSWORD") or env_values.get("FERNIQ_PASSWORD") or ""
+
+    missing: list[str] = []
+    if not email.strip():
+        missing.append("FERNIQ_FORECAST_EMAIL o FERNIQ_EMAIL")
+    if not password.strip():
+        missing.append("FERNIQ_FORECAST_PASSWORD o FERNIQ_PASSWORD")
+    return missing
+
+
+def summarize_error_message(exc: Exception, limit: int = 3000) -> str:
+    text = str(exc).strip()
+    if not text:
+        return "Se produjo un error sin detalle."
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return text[:limit]
+
+    runtime_lines = [line for line in lines if line.startswith("RuntimeError:")]
+    if runtime_lines:
+        selected_runtime = runtime_lines[-3:]
+        cleaned_runtime = "\n".join(selected_runtime).strip()
+        if len(cleaned_runtime) > limit:
+            return cleaned_runtime[: limit - 3].rstrip() + "..."
+        return cleaned_runtime
+
+    selected: list[str] = []
+    for line in lines:
+        if line.startswith("Traceback"):
+            continue
+        if line.startswith("File "):
+            continue
+        if line.startswith("During handling of the above exception"):
+            continue
+        if line.startswith("return "):
+            continue
+        if line.startswith("comerciales ="):
+            continue
+        if line.startswith("open_"):
+            continue
+        if line.startswith("raise RuntimeError("):
+            continue
+        if line.startswith("~"):
+            continue
+        selected.append(line)
+        if len("\n".join(selected)) >= limit:
+            break
+
+    cleaned = "\n".join(selected).strip() or text
+    if len(cleaned) > limit:
+        cleaned = cleaned[: limit - 3].rstrip() + "..."
+    return cleaned
+
+
+async def reply_error_text(update: Update, prefix: str, exc: Exception) -> None:
+    if not update.message:
+        return
+
+    message = f"{prefix}: {summarize_error_message(exc)}"
+    for chunk in split_message(message, limit=3000):
+        try:
+            await update.message.reply_text(
+                chunk,
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=20,
+            )
+        except BadRequest:
+            fallback = chunk[:2900].rstrip() + "..."
+            await update.message.reply_text(
+                fallback,
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=20,
+            )
+        except TimedOut:
+            continue
+
+
+async def safe_reply_text(message, text: str) -> None:
+    try:
+        await message.reply_text(
+            text,
+            read_timeout=60,
+            write_timeout=60,
+            connect_timeout=20,
+        )
+    except TimedOut:
+        return
+
+
+async def safe_edit_message(message, text: str) -> None:
+    try:
+        await message.edit_text(
+            text,
+            read_timeout=60,
+            write_timeout=60,
+            connect_timeout=20,
+        )
+    except BadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            return
+        raise
+    except TimedOut:
+        return
+
+
+async def send_typing_heartbeat(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    stop_event: asyncio.Event,
+    interval_seconds: float = 4.0,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)  # type: ignore[arg-type]
+        except Exception:
+            pass
+
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+        except TimeoutError:
+            continue
+
+
+async def send_waiting_updates(
+    message,
+    base_text: str,
+    stop_event: asyncio.Event,
+    interval_seconds: float = 15.0,
+) -> None:
+    started_at = time.monotonic()
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+            break
+        except TimeoutError:
+            elapsed = format_elapsed_seconds(started_at)
+            await safe_edit_message(
+                message,
+                f"{base_text}\nSigo trabajando. Tiempo transcurrido: {elapsed}.",
+            )
+
+
+def filter_official_comerciales(comerciales: list[str]) -> list[str]:
+    return [item.strip() for item in comerciales if item.strip()]
+
+
+def extract_log_message(line: str) -> str:
+    cleaned = line.strip()
+    match = re.match(r"^\[\d{2}:\d{2}:\d{2}\]\s*(.+)$", cleaned)
+    if match:
+        return match.group(1).strip()
+    return cleaned
+
+
+def build_forecast_progress_text(progress: dict[str, object], started_at: float) -> str:
+    lines = ["Forecast en marcha."]
+
+    stage = str(progress.get("stage") or "").strip()
+    if stage:
+        lines.append(f"Estado: {stage}")
+
+    total = progress.get("total")
+    completed = int(progress.get("completed") or 0)
+    if isinstance(total, int) and total > 0:
+        lines.append(f"Comerciales completados: {completed}/{total}")
+
+    workers = progress.get("workers")
+    if isinstance(workers, int) and workers > 0:
+        lines.append(f"Workers en paralelo: {workers}")
+
+    last_detail = str(progress.get("last_detail") or "").strip()
+    if last_detail:
+        lines.append(f"Ultimo avance: {last_detail}")
+
+    lines.append(f"Tiempo transcurrido: {format_elapsed_seconds(started_at)}")
+    return "\n".join(lines)
+
+
+def update_forecast_progress(progress: dict[str, object], raw_line: str) -> bool:
+    line = extract_log_message(raw_line)
+    if not line:
+        return False
+
+    progress["last_detail"] = line
+
+    if line.startswith("Intentando extraccion en modo headless"):
+        progress["stage"] = "Abriendo Forecast en modo rapido"
+        return True
+    if line.startswith("La URL directa de Forecast devuelve 404"):
+        progress["stage"] = "Entrando a Forecast desde la home"
+        return True
+    if line.startswith("Intentando regenerar sesion automaticamente"):
+        progress["stage"] = "Regenerando la sesion de Forecast"
+        return True
+    if line.startswith("Sesion regenerada automaticamente"):
+        progress["stage"] = "Sesion regenerada. Reintentando"
+        return True
+    if line.startswith("Reintentando extraccion en modo visible"):
+        progress["stage"] = "Reintentando en modo visible"
+        return True
+
+    if line.startswith("Comerciales detectados:"):
+        raw_items = line.split(":", 1)[1].strip()
+        comerciales = filter_official_comerciales([item.strip() for item in raw_items.split(",")])
+        progress["total"] = len(comerciales)
+        progress["stage"] = "Comerciales detectados"
+        return True
+
+    if line.startswith("Procesando Forecast con"):
+        match = re.search(r"(\d+)", line)
+        if match:
+            progress["workers"] = int(match.group(1))
+        progress["stage"] = "Sacando datos por comercial"
+        return True
+
+    if line.startswith("Datos extraidos para "):
+        progress["completed"] = int(progress.get("completed") or 0) + 1
+        progress["stage"] = "Sacando datos por comercial"
+        return True
+
+    if line.startswith("Sin datos visibles para "):
+        progress["completed"] = int(progress.get("completed") or 0) + 1
+        progress["stage"] = "Sacando datos por comercial"
+        return True
+
+    if line.startswith("Error procesando comercial "):
+        progress["completed"] = int(progress.get("completed") or 0) + 1
+        progress["stage"] = "Sacando datos por comercial"
+        return True
+
+    if line.startswith("No se extrajeron datos"):
+        progress["stage"] = "Generando reporte vacio"
+        return True
+
+    if "resultado_forecast_ferniq" in line.lower():
+        progress["stage"] = "Generando reporte final"
+        return True
+
+    return False
+
+
+async def run_forecast_extraction_subprocess(
+    on_output_line=None,
+) -> Path:
     if not FORECAST_DIR.exists():
         raise FileNotFoundError(f"No existe la carpeta de forecast: {FORECAST_DIR}")
     if not FORECAST_ENV_FILE.exists():
@@ -156,21 +482,38 @@ def run_forecast_extraction_subprocess() -> Path:
 
     command = [
         sys.executable,
+        "-u",
         "-c",
         "from extraer_forecast import run_extraction_with_retry; run_extraction_with_retry()",
     ]
-    completed = subprocess.run(
-        command,
+    process = await asyncio.create_subprocess_exec(
+        *command,
         cwd=str(FORECAST_DIR),
         env=build_forecast_subprocess_env(),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
     )
+    output_lines: list[str] = []
 
-    if completed.returncode != 0:
-        output_parts = [completed.stderr.strip(), completed.stdout.strip()]
-        error_text = "\n".join(part for part in output_parts if part).strip()
+    assert process.stdout is not None
+    while True:
+        raw_line = await process.stdout.readline()
+        if not raw_line:
+            break
+        decoded_line = raw_line.decode("utf-8", errors="replace").rstrip()
+        if not decoded_line:
+            continue
+        output_lines.append(decoded_line)
+        if on_output_line is not None:
+            try:
+                await on_output_line(decoded_line)
+            except TimedOut:
+                continue
+
+    return_code = await process.wait()
+
+    if return_code != 0:
+        error_text = "\n".join(output_lines).strip()
         raise RuntimeError(error_text or "La extraccion de forecast termino con error.")
 
     if not FORECAST_OUTPUT_FILE.exists():
@@ -189,48 +532,161 @@ async def handle_sacar_datos(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not update.message or not await ensure_authorized(update):
         return
 
-    async with RUN_LOCK:
+    global CURRENT_JOB_LABEL
+    if RUN_LOCK.locked():
+        current_job = CURRENT_JOB_LABEL or "otro proceso"
         await update.message.reply_text(
-            "Voy a sacar los datos de todos los comerciales. Esto puede tardar un poco."
+            f"Ya estoy ejecutando {current_job}. Cuando termine te paso el resultado."
         )
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING) # type: ignore
+        return
 
+    async with RUN_LOCK:
+        CURRENT_JOB_LABEL = "la extraccion de Etapa"
         try:
-            excel_path = await asyncio.to_thread(run_extraction_with_retry)
-            df = await asyncio.to_thread(load_results_dataframe)
-        except Exception as exc:
-            await update.message.reply_text(f"Error al sacar datos: {exc}")
-            return
+            status_message = await update.message.reply_text(
+                "Voy a sacar los datos de todos los comerciales. Esto puede tardar un poco.",
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=20,
+            )
+            stop_event = asyncio.Event()
+            typing_task = asyncio.create_task(
+                send_typing_heartbeat(context, update.effective_chat.id, stop_event)  # type: ignore[arg-type]
+            )
+            waiting_task = asyncio.create_task(
+                send_waiting_updates(
+                    status_message,
+                    "Voy a sacar los datos de todos los comerciales. Esto puede tardar un poco.",
+                    stop_event,
+                )
+            )
 
-        summary = build_summary_message(df)
+            try:
+                excel_path = await asyncio.to_thread(run_extraction_with_retry)
+                df = await asyncio.to_thread(load_results_dataframe)
+            except Exception as exc:
+                await reply_error_text(update, "Error al sacar datos", exc)
+                return
+            finally:
+                stop_event.set()
+                await asyncio.gather(typing_task, waiting_task, return_exceptions=True)
 
-        for chunk in split_message(summary):
-            await update.message.reply_text(chunk)
+            summary = build_summary_message(df)
+            await safe_edit_message(status_message, "Extraccion de Etapa completada. Te envio el resumen y el Excel.")
 
-        await send_excel(update, excel_path)
+            for chunk in split_message(summary):
+                await safe_reply_text(update.message, chunk)
+
+            await send_excel(update, excel_path)
+        finally:
+            CURRENT_JOB_LABEL = ""
 
 
 async def handle_sacar_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not await ensure_authorized(update):
         return
 
-    async with RUN_LOCK:
+    global CURRENT_JOB_LABEL
+    if RUN_LOCK.locked():
+        current_job = CURRENT_JOB_LABEL or "otro proceso"
         await update.message.reply_text(
-            "Voy a sacar los datos de forecast de todos los comerciales. Esto puede tardar un poco."
+            f"Ya estoy ejecutando {current_job}. Cuando termine te paso el resultado."
         )
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING) # type: ignore
+        return
 
+    async with RUN_LOCK:
+        CURRENT_JOB_LABEL = "la extraccion de Forecast"
         try:
-            report_path = await asyncio.to_thread(run_forecast_extraction_subprocess)
-            summary = await asyncio.to_thread(load_forecast_results_text)
-        except Exception as exc:
-            await update.message.reply_text(f"Error al sacar forecast: {exc}")
-            return
+            missing_credentials = get_forecast_missing_credentials()
+            if missing_credentials:
+                await update.message.reply_text(
+                    "Forecast no puede regenerar la sesion automaticamente porque faltan credenciales en "
+                    f"{FORECAST_ENV_FILE.name}: {', '.join(missing_credentials)}.",
+                    read_timeout=60,
+                    write_timeout=60,
+                    connect_timeout=20,
+                )
+                return
 
-        for chunk in split_message(summary):
-            await update.message.reply_text(chunk)
+            started_at = time.monotonic()
+            status_message = await update.message.reply_text(
+                "Iniciando forecast. Te ire avisando del progreso.",
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=20,
+            )
+            progress: dict[str, object] = {
+                "stage": "Preparando la extraccion",
+                "completed": 0,
+                "total": None,
+                "workers": None,
+                "last_detail": "",
+            }
+            last_status_text = build_forecast_progress_text(progress, started_at)
+            await safe_edit_message(status_message, last_status_text)
 
-        await send_report(update, report_path)
+            stop_event = asyncio.Event()
+            typing_task = asyncio.create_task(
+                send_typing_heartbeat(context, update.effective_chat.id, stop_event)  # type: ignore[arg-type]
+            )
+            last_sent_at = 0.0
+
+            async def on_output_line(line: str) -> None:
+                nonlocal last_status_text, last_sent_at
+
+                changed = update_forecast_progress(progress, line)
+                if not changed:
+                    return
+
+                new_text = build_forecast_progress_text(progress, started_at)
+                now = time.monotonic()
+                force = any(
+                    marker in extract_log_message(line)
+                    for marker in (
+                        "Comerciales detectados:",
+                        "Procesando Forecast con",
+                        "Datos extraidos para ",
+                        "Sin datos visibles para ",
+                        "Error procesando comercial ",
+                    )
+                )
+                if not force and now - last_sent_at < 2.5:
+                    return
+                if new_text == last_status_text:
+                    return
+
+                await safe_edit_message(status_message, new_text)
+                last_status_text = new_text
+                last_sent_at = now
+
+            try:
+                report_path = await run_forecast_extraction_subprocess(on_output_line=on_output_line)
+                summary = await asyncio.to_thread(load_forecast_results_text)
+            except Exception as exc:
+                await reply_error_text(update, "Error al sacar forecast", exc)
+                return
+            finally:
+                stop_event.set()
+                await asyncio.gather(typing_task, return_exceptions=True)
+
+            await safe_edit_message(
+                status_message,
+                "Forecast completado. Te envio el resumen y el reporte.",
+            )
+
+            for chunk in split_message(summary):
+                await safe_reply_text(update.message, chunk)
+
+            try:
+                await send_report(update, report_path)
+            except TimedOut:
+                await safe_reply_text(
+                    update.message,
+                    "El forecast se genero bien, pero Telegram ha tardado demasiado al enviar el archivo. "
+                    "Usa /ultimo_forecast y te lo vuelvo a mandar.",
+                )
+        finally:
+            CURRENT_JOB_LABEL = ""
 
 
 async def handle_estado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -367,8 +823,16 @@ async def post_init(application: Application) -> None:
     await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 
+async def handle_application_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    error = context.error
+    if error is None:
+        return
+    print(f"Error controlado del bot: {summarize_error_message(error, limit=1200)}")
+
+
 def main() -> None:
     load_dotenv()
+    acquire_single_instance_lock()
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
     if not bot_token:
@@ -383,6 +847,7 @@ def main() -> None:
     }
 
     application = Application.builder().token(bot_token).post_init(post_init).build()
+    application.add_error_handler(handle_application_error)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("ayuda", handle_ayuda))
     application.add_handler(CommandHandler("sacar_datos", handle_sacar_datos))

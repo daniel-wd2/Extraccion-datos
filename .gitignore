@@ -1,2 +1,5 @@
 __pycache__/
 *.py[cod]
+.env
+.telegram_bot.lock
+.forecast_browser_profile/

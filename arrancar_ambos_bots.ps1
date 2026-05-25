@@ -70,10 +70,8 @@ function Test-BotAlreadyRunning {
         [string]$ScriptName
     )
 
-    $escapedDir = $WorkingDirectory.Replace("\", "\\")
-    $escapedScript = $ScriptName.Replace("\", "\\")
     $processes = Get-CimInstance Win32_Process | Where-Object {
-        $_.CommandLine -like "*$escapedDir*" -and $_.CommandLine -like "*$escapedScript*"
+        $_.CommandLine -and $_.CommandLine -like "*$WorkingDirectory*" -and $_.CommandLine -like "*$ScriptName*"
     }
 
     return @($processes).Count -gt 0

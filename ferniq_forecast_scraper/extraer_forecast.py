@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -96,6 +97,45 @@ COMERCIAL_ALIASES = {
 def log(message: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     print(f"[{now}] {message}")
+
+
+def get_parallel_workers() -> int:
+    raw_value = os.getenv("FERNIQ_FORECAST_MAX_WORKERS", "").strip()
+    default_workers = 3
+    max_workers = 4
+
+    if not raw_value:
+        return default_workers
+
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        log(
+            "Valor invalido en FERNIQ_FORECAST_MAX_WORKERS. "
+            f"Se usaran {default_workers} workers."
+        )
+        return default_workers
+
+    return max(1, min(max_workers, parsed))
+
+
+def split_batches(items: list[str], batch_count: int) -> list[list[str]]:
+    if batch_count <= 1:
+        return [items[:]]
+
+    batches: list[list[str]] = [[] for _ in range(batch_count)]
+    for index, item in enumerate(items):
+        batches[index % batch_count].append(item)
+    return [batch for batch in batches if batch]
+
+
+def should_use_system_chrome_for_extraction() -> bool:
+    return os.getenv("FERNIQ_FORECAST_USE_SYSTEM_CHROME", "").strip().lower() in {
+        "1",
+        "true",
+        "si",
+        "yes",
+    }
 
 
 def normalize_text(value: str) -> str:
@@ -543,6 +583,17 @@ def get_available_comerciales(page: Page) -> list[str]:
 def get_comerciales_to_process(page: Page) -> list[str]:
     detected = get_available_comerciales(page)
     if detected:
+        official_by_normalized = {
+            normalize_text(canonical_comercial_name(comercial)): canonical_comercial_name(comercial)
+            for comercial in COMERCIALES
+        }
+        filtered = [
+            official_by_normalized[normalize_text(canonical_comercial_name(comercial))]
+            for comercial in detected
+            if normalize_text(canonical_comercial_name(comercial)) in official_by_normalized
+        ]
+        if filtered:
+            return filtered
         return detected
     return COMERCIALES
 
@@ -1084,47 +1135,128 @@ def run_extraction(headless: bool = False) -> Path:
     extraction_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     results: list[dict] = []
 
-    with sync_playwright() as p:
+    def launch_browser_instance(playwright):
         launch_kwargs = {"headless": headless}
-        chrome_path = get_chrome_path()
+        chrome_path = get_chrome_path() if should_use_system_chrome_for_extraction() else None
         if chrome_path:
             launch_kwargs["executable_path"] = str(chrome_path)
         try:
-            browser = p.chromium.launch(ignore_default_args=["--no-sandbox"], **launch_kwargs)
+            return playwright.chromium.launch(ignore_default_args=["--no-sandbox"], **launch_kwargs)
         except Exception as launch_exc:
             log(f"No se pudo lanzar Chrome del sistema ({launch_exc}). Intentando con Chromium de Playwright...")
             if "executable_path" in launch_kwargs:
                 del launch_kwargs["executable_path"]
-            browser = p.chromium.launch(ignore_default_args=["--no-sandbox"], **launch_kwargs)
-        context = browser.new_context(storage_state=str(SESSION_FILE), accept_downloads=True)
-        restore_session_storage(context)
-        page = context.new_page()
+            return playwright.chromium.launch(ignore_default_args=["--no-sandbox"], **launch_kwargs)
 
-        try:
-            open_forecast_view(page)
-            ensure_forecast_tab(page)
-            comerciales = get_comerciales_to_process(page)
-            log(f"Comerciales detectados: {', '.join(comerciales)}")
+    def detect_comerciales() -> list[str]:
+        with sync_playwright() as p:
+            browser = launch_browser_instance(p)
+            context = browser.new_context(storage_state=str(SESSION_FILE), accept_downloads=True)
+            restore_session_storage(context)
+            page = context.new_page()
+            try:
+                open_forecast_view(page)
+                ensure_forecast_tab(page)
+                return get_comerciales_to_process(page)
+            finally:
+                context.close()
+                browser.close()
 
-            for comercial in comerciales:
-                log(f"Procesando comercial: {comercial}")
+    def extract_for_comercial_with_page(page: Page, comercial: str) -> list[dict]:
+        ensure_forecast_tab(page)
+        select_only_comercial(page, comercial)
+        records = try_extract_download(page, comercial, extraction_date)
+        if not records:
+            records = extract_forecast_data_from_dom(page, comercial, extraction_date)
+        return records
+
+    def extract_for_comercial(comercial: str) -> list[dict]:
+        with sync_playwright() as p:
+            browser = launch_browser_instance(p)
+            context = browser.new_context(storage_state=str(SESSION_FILE), accept_downloads=True)
+            restore_session_storage(context)
+            page = context.new_page()
+            try:
+                open_forecast_view(page)
+                return extract_for_comercial_with_page(page, comercial)
+            finally:
+                context.close()
+                browser.close()
+
+    def extract_for_comerciales_batch(comercial_batch: list[str]) -> list[tuple[str, list[dict] | None, Exception | None]]:
+        batch_results: list[tuple[str, list[dict] | None, Exception | None]] = []
+        with sync_playwright() as p:
+            browser = launch_browser_instance(p)
+            context = browser.new_context(storage_state=str(SESSION_FILE), accept_downloads=True)
+            restore_session_storage(context)
+            page = context.new_page()
+            try:
+                open_forecast_view(page)
+                ensure_forecast_tab(page)
+
+                for comercial in comercial_batch:
+                    try:
+                        records = extract_for_comercial_with_page(page, comercial)
+                    except Exception:
+                        # Reabrir la vista una vez evita perder todo el batch por una sesion inestable.
+                        open_forecast_view(page)
+                        ensure_forecast_tab(page)
+                        try:
+                            records = extract_for_comercial_with_page(page, comercial)
+                        except Exception as exc:
+                            batch_results.append((comercial, None, exc))
+                            continue
+
+                    batch_results.append((comercial, records, None))
+            finally:
+                context.close()
+                browser.close()
+
+        return batch_results
+
+    comerciales = detect_comerciales()
+    log(f"Comerciales detectados: {', '.join(comerciales)}")
+
+    workers = min(get_parallel_workers(), max(1, len(comerciales)))
+    log(f"Procesando Forecast con {workers} worker(s) en paralelo")
+
+    if workers == 1:
+        for comercial in comerciales:
+            log(f"Procesando comercial: {comercial}")
+            try:
+                records = extract_for_comercial(comercial)
+                if records:
+                    results.extend(records)
+                    log(f"Datos extraidos para {comercial}")
+                else:
+                    log(f"Sin datos visibles para {comercial}")
+            except Exception as exc:
+                log(f"Error procesando comercial {comercial}: {exc}")
+                continue
+    else:
+        comercial_batches = split_batches(comerciales, workers)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_batch = {
+                executor.submit(extract_for_comerciales_batch, comercial_batch): comercial_batch
+                for comercial_batch in comercial_batches
+            }
+            for future in as_completed(future_to_batch):
                 try:
-                    select_only_comercial(page, comercial)
-                    records = try_extract_download(page, comercial, extraction_date)
-                    if not records:
-                        records = extract_forecast_data_from_dom(page, comercial, extraction_date)
+                    batch_results = future.result()
+                except Exception as exc:
+                    batch_name = ", ".join(future_to_batch[future])
+                    log(f"Error procesando lote de comerciales {batch_name}: {exc}")
+                    continue
 
+                for comercial, records, error in batch_results:
+                    if error is not None:
+                        log(f"Error procesando comercial {comercial}: {error}")
+                        continue
                     if records:
                         results.extend(records)
-                        log("Datos extraidos")
+                        log(f"Datos extraidos para {comercial}")
                     else:
                         log(f"Sin datos visibles para {comercial}")
-                except Exception as exc:
-                    log(f"Error procesando comercial {comercial}: {exc}")
-                    continue
-        finally:
-            context.close()
-            browser.close()
 
     deduped = deduplicate_records(results)
     if not deduped:

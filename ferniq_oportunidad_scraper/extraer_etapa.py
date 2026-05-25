@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -90,6 +91,26 @@ COMERCIAL_ALIASES = {
 def log(message: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     print(f"[{now}] {message}")
+
+
+def get_parallel_workers() -> int:
+    raw_value = os.getenv("FERNIQ_STAGE_MAX_WORKERS", "").strip()
+    default_workers = 3
+    max_workers = 4
+
+    if not raw_value:
+        return default_workers
+
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        log(
+            "Valor invalido en FERNIQ_STAGE_MAX_WORKERS. "
+            f"Se usaran {default_workers} workers."
+        )
+        return default_workers
+
+    return max(1, min(max_workers, parsed))
 
 
 def normalize_text(value: str) -> str:
@@ -530,6 +551,17 @@ def get_available_comerciales(page: Page) -> list[str]:
 def get_comerciales_to_process(page: Page) -> list[str]:
     detected = get_available_comerciales(page)
     if detected:
+        official_by_normalized = {
+            normalize_text(canonical_comercial_name(comercial)): canonical_comercial_name(comercial)
+            for comercial in COMERCIALES
+        }
+        filtered = [
+            official_by_normalized[normalize_text(canonical_comercial_name(comercial))]
+            for comercial in detected
+            if normalize_text(canonical_comercial_name(comercial)) in official_by_normalized
+        ]
+        if filtered:
+            return filtered
         return detected
     return COMERCIALES
 
@@ -1244,41 +1276,82 @@ def run_extraction(headless: bool = False) -> Path:
     extraction_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     results: list[dict] = []
 
-    with sync_playwright() as p:
+    def build_launch_kwargs() -> dict:
         launch_kwargs = {"headless": headless}
         chrome_path = get_chrome_path()
         if chrome_path:
             launch_kwargs["executable_path"] = str(chrome_path)
-        browser = p.chromium.launch(**launch_kwargs)
-        context = browser.new_context(storage_state=str(SESSION_FILE), accept_downloads=True)
-        restore_session_storage(context)
-        page = context.new_page()
+        return launch_kwargs
 
-        try:
-            open_stage_view(page)
-            ensure_stage_tab(page)
-            comerciales = get_comerciales_to_process(page)
-            log(f"Comerciales detectados: {', '.join(comerciales)}")
+    def detect_comerciales() -> list[str]:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(**build_launch_kwargs())
+            context = browser.new_context(storage_state=str(SESSION_FILE), accept_downloads=True)
+            restore_session_storage(context)
+            page = context.new_page()
+            try:
+                open_stage_view(page)
+                ensure_stage_tab(page)
+                return get_comerciales_to_process(page)
+            finally:
+                context.close()
+                browser.close()
 
-            for comercial in comerciales:
-                log(f"Procesando comercial: {comercial}")
+    def extract_for_comercial(comercial: str) -> list[dict]:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(**build_launch_kwargs())
+            context = browser.new_context(storage_state=str(SESSION_FILE), accept_downloads=True)
+            restore_session_storage(context)
+            page = context.new_page()
+            try:
+                open_stage_view(page)
+                ensure_stage_tab(page)
+                select_only_comercial(page, comercial)
+                records = try_extract_download(page, comercial, extraction_date)
+                if not records:
+                    records = extract_stage_data_from_dom(page, comercial, extraction_date)
+                return records
+            finally:
+                context.close()
+                browser.close()
+
+    comerciales = detect_comerciales()
+    log(f"Comerciales detectados: {', '.join(comerciales)}")
+
+    workers = min(get_parallel_workers(), max(1, len(comerciales)))
+    log(f"Procesando Etapa con {workers} worker(s) en paralelo")
+
+    if workers == 1:
+        for comercial in comerciales:
+            log(f"Procesando comercial: {comercial}")
+            try:
+                records = extract_for_comercial(comercial)
+                if records:
+                    results.extend(records)
+                    log(f"Datos extraidos para {comercial}")
+                else:
+                    log(f"Sin datos visibles para {comercial}")
+            except Exception as exc:
+                log(f"Error procesando comercial {comercial}: {exc}")
+                continue
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_comercial = {
+                executor.submit(extract_for_comercial, comercial): comercial
+                for comercial in comerciales
+            }
+            for future in as_completed(future_to_comercial):
+                comercial = future_to_comercial[future]
                 try:
-                    select_only_comercial(page, comercial)
-                    records = try_extract_download(page, comercial, extraction_date)
-                    if not records:
-                        records = extract_stage_data_from_dom(page, comercial, extraction_date)
-
+                    records = future.result()
                     if records:
                         results.extend(records)
-                        log("Datos extraidos")
+                        log(f"Datos extraidos para {comercial}")
                     else:
                         log(f"Sin datos visibles para {comercial}")
                 except Exception as exc:
                     log(f"Error procesando comercial {comercial}: {exc}")
                     continue
-        finally:
-            context.close()
-            browser.close()
 
     deduped = deduplicate_records(results)
     if not deduped:

@@ -291,6 +291,10 @@ def try_auto_login(page: Page, email: str, password: str) -> bool:
     return False
 
 
+def safe_exception_text(exc: Exception) -> str:
+    return str(exc).encode("ascii", errors="replace").decode("ascii")
+
+
 def save_session(allow_manual: bool = True, headless: bool = False) -> None:
     load_dotenv()
     email = os.getenv("FERNIQ_FORECAST_EMAIL", "").strip()
@@ -313,6 +317,13 @@ def save_session(allow_manual: bool = True, headless: bool = False) -> None:
     print(f"Sesion destino: {SESSION_FILE}")
     user_data_dir = get_persistent_user_data_dir()
     profile_directory = get_profile_directory_argument()
+    if headless and use_system_chrome_profile():
+        user_data_dir = PERSISTENT_PROFILE_DIR
+        profile_directory = None
+        print(
+            "En modo headless no se usara el perfil normal de Chrome. "
+            f"Se utilizara un perfil dedicado: {user_data_dir}"
+        )
     print(f"Perfil persistente: {user_data_dir}")
     if profile_directory:
         print(f"Directorio de perfil Chrome: {profile_directory}")
@@ -331,13 +342,26 @@ def save_session(allow_manual: bool = True, headless: bool = False) -> None:
                 **launch_kwargs,
             )
         except Exception as launch_exc:
-            print(f"No se pudo iniciar Chrome del sistema ({launch_exc}). Intentando con Chromium de Playwright...")
+            print(
+                "No se pudo iniciar Chrome del sistema "
+                f"({safe_exception_text(launch_exc)}). "
+                "Intentando con Chromium de Playwright..."
+            )
             if "executable_path" in launch_kwargs:
                 del launch_kwargs["executable_path"]
+            fallback_dir = user_data_dir
+            fallback_kwargs = dict(launch_kwargs)
+            if use_system_chrome_profile():
+                fallback_dir = PERSISTENT_PROFILE_DIR
+                fallback_kwargs.pop("args", None)
+                print(
+                    "No se pudo abrir el perfil de Chrome en uso. "
+                    f"Reintentando con un perfil dedicado: {fallback_dir}"
+                )
             context = p.chromium.launch_persistent_context(
-                user_data_dir=str(user_data_dir),
+                user_data_dir=str(fallback_dir),
                 ignore_default_args=["--no-sandbox"],
-                **launch_kwargs,
+                **fallback_kwargs,
             )
         page = context.pages[0] if context.pages else context.new_page()
         open_login_page(page)
@@ -347,6 +371,17 @@ def save_session(allow_manual: bool = True, headless: bool = False) -> None:
             auto_login_ok = try_auto_login(page, email, password)
         elif not email or not password:
             print("No hay credenciales en .env; se usara login manual.")
+            if not allow_manual:
+                context.close()
+                missing = []
+                if not email:
+                    missing.append("FERNIQ_FORECAST_EMAIL o FERNIQ_EMAIL")
+                if not password:
+                    missing.append("FERNIQ_FORECAST_PASSWORD o FERNIQ_PASSWORD")
+                raise RuntimeError(
+                    "Faltan credenciales para Forecast en .env: "
+                    + ", ".join(missing)
+                )
 
         if not auto_login_ok and not is_dashboard_ready(page) and allow_manual:
             print("Inicia sesion manualmente en la ventana del navegador.")

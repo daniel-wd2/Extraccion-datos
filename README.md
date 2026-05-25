@@ -38,10 +38,43 @@ Ese lanzador abre una sola ventana y ejecuta:
 
 Cada carpeta sigue usando su propio `.env` y sus propios archivos de sesion para el scraping:
 
-- `ferniq_oportunidad_scraper` mantiene su sesion de Etapa
-- `ferniq_forecast_scraper` mantiene su sesion de Forecast
+- `ferniq_oportunidad_scraper` mantiene su sesion de Etapa y el token del bot real
+- `ferniq_forecast_scraper` mantiene solo su sesion y credenciales de Forecast
 
 Lo que ya no se arranca por separado es Telegram para Forecast.
+
+## Configuracion recomendada
+
+`ferniq_oportunidad_scraper\.env`
+
+```env
+FERNIQ_EMAIL=
+FERNIQ_PASSWORD=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ALLOWED_CHAT_ID=
+FERNIQ_STAGE_MAX_WORKERS=3
+USE_SYSTEM_CHROME_PROFILE=
+CHROME_PROFILE_DIRECTORY=
+CHROME_USER_DATA_DIR=
+CHROME_EXECUTABLE=
+```
+
+`ferniq_forecast_scraper\.env`
+
+```env
+FERNIQ_EMAIL=
+FERNIQ_PASSWORD=
+FERNIQ_FORECAST_MAX_WORKERS=3
+USE_SYSTEM_CHROME_PROFILE=
+CHROME_PROFILE_DIRECTORY=
+CHROME_USER_DATA_DIR=
+CHROME_EXECUTABLE=
+```
+
+En otras palabras: el token de Telegram vive solo en `ferniq_oportunidad_scraper`, porque `forecast` ya es una opcion mas del bot principal.
+
+`FERNIQ_STAGE_MAX_WORKERS` y `FERNIQ_FORECAST_MAX_WORKERS` controlan cuantas extracciones en paralelo se lanzan.
+El valor recomendado para empezar es `3`. Si la web responde bien, puedes probar `4`. Si ves inestabilidad, baja a `2`.
 
 ## Forecast antiguo
 

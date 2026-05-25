@@ -16,7 +16,7 @@ def load_dotenv(env_file: Path = ENV_FILE) -> None:
             continue
 
         key, value = line.split("=", 1)
-        key = key.strip()
+        key = key.strip().lstrip("\ufeff")
         value = value.strip().strip('"').strip("'")
 
         if key and key not in os.environ:
