@@ -1,0 +1,9 @@
+# Un nombre por linea. Ambos scrapers leen este fichero.
+Ismael Serrano
+Javier Barcelo
+Jesus Cabello
+Miguel Angel Haro
+Paco Buendia
+Agustin Parejo
+Ramon Jimenez
+Daniel Amparan

@@ -12,7 +12,7 @@ import pandas as pd
 from openpyxl.styles import Alignment
 from playwright.sync_api import Error, Locator, Page, TimeoutError, sync_playwright
 
-from config_utils import load_dotenv
+from config_utils import load_comerciales, load_dotenv
 from guardar_sesion import get_chrome_path, save_session, try_auto_login
 
 
@@ -23,8 +23,9 @@ SESSION_FILE = BASE_DIR / "sesion_ferniq.json"
 SESSION_STORAGE_FILE = BASE_DIR / "sesion_ferniq_session_storage.json"
 EXPORTS_DIR = BASE_DIR / "exports"
 OUTPUT_FILE = BASE_DIR / "resultado_etapa_ferniq.xlsx"
+TEXT_OUTPUT_FILE = BASE_DIR / "resultado_etapa_ferniq.txt"
 
-COMERCIALES = [
+COMERCIALES = load_comerciales([
     "Ismael Serrano",
     "Javier Barcelo",
     "Jesus Cabello",
@@ -32,7 +33,8 @@ COMERCIALES = [
     "Paco Buendia",
     "Agustin Parejo",
     "Ramón Jimenez",
-]
+    "Daniel Amparan",
+])
 
 MES = "Mayo 2026"
 
@@ -86,6 +88,22 @@ COMERCIAL_ALIASES = {
     "agustin parejo": ["Mi usuario"],
     "ramon jimenez": ["Ramón Jimenez"],
 }
+
+
+def merge_comerciales(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+
+    for group in groups:
+        for comercial in group:
+            canonical = canonical_comercial_name(comercial)
+            normalized = normalize_text(canonical)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(canonical)
+
+    return merged
 
 
 def log(message: str) -> None:
@@ -555,14 +573,14 @@ def get_comerciales_to_process(page: Page) -> list[str]:
             normalize_text(canonical_comercial_name(comercial)): canonical_comercial_name(comercial)
             for comercial in COMERCIALES
         }
-        filtered = [
-            official_by_normalized[normalize_text(canonical_comercial_name(comercial))]
+        detected_canonical = [
+            official_by_normalized.get(
+                normalize_text(canonical_comercial_name(comercial)),
+                canonical_comercial_name(comercial),
+            )
             for comercial in detected
-            if normalize_text(canonical_comercial_name(comercial)) in official_by_normalized
         ]
-        if filtered:
-            return filtered
-        return detected
+        return merge_comerciales(detected_canonical, COMERCIALES)
     return COMERCIALES
 
 
@@ -1170,10 +1188,17 @@ def results_to_dataframe(records: list[dict]) -> pd.DataFrame:
 
 def build_summary_dataframe(records: list[dict]) -> pd.DataFrame:
     if not records:
-        return pd.DataFrame(columns=["comercial", *STAGE_NAMES])
+        empty_summary = pd.DataFrame({"comercial": COMERCIALES})
+        for stage in STAGE_NAMES:
+            empty_summary[stage] = 0.0
+        return empty_summary
 
     detail_df = results_to_dataframe(records).copy()
     detail_df["precio"] = pd.to_numeric(detail_df["precio"], errors="coerce")
+    ordered_comerciales = merge_comerciales(
+        COMERCIALES,
+        detail_df["comercial"].dropna().astype(str).tolist(),
+    )
 
     summary_df = (
         detail_df.pivot_table(
@@ -1182,6 +1207,7 @@ def build_summary_dataframe(records: list[dict]) -> pd.DataFrame:
             values="precio",
             aggfunc="sum",
         )
+        .reindex(index=ordered_comerciales)
         .reindex(columns=STAGE_NAMES)
         .fillna(0)
         .reset_index()
@@ -1191,17 +1217,68 @@ def build_summary_dataframe(records: list[dict]) -> pd.DataFrame:
     return summary_df
 
 
+def format_spanish_number(
+    value: object,
+    *,
+    decimals: int = 2,
+    suffix: str = "",
+) -> str:
+    if value is None or pd.isna(value):
+        return ""
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value).strip()
+
+    formatted = f"{number:,.{decimals}f}"
+    integer_part, decimal_part = formatted.split(".")
+    integer_part = integer_part.replace(",", ".")
+
+    if decimals <= 0:
+        return f"{integer_part}{suffix}"
+
+    return f"{integer_part},{decimal_part}{suffix}"
+
+
+def save_text_results(detail_df: pd.DataFrame) -> Path:
+    export_df = detail_df.copy()
+
+    if "cantidad" in export_df.columns:
+        export_df["cantidad"] = export_df["cantidad"].apply(
+            lambda value: format_spanish_number(value, decimals=0)
+        )
+
+    if "valor_texto" in export_df.columns:
+        export_df["valor_texto"] = export_df["valor_texto"].apply(limpiar_precio)
+        export_df["valor_texto"] = export_df["valor_texto"].apply(
+            lambda value: format_spanish_number(value, decimals=2, suffix=" €")
+        )
+
+    if "precio" in export_df.columns:
+        export_df["precio"] = export_df["precio"].apply(
+            lambda value: format_spanish_number(value, decimals=2)
+        )
+
+    export_df.to_csv(TEXT_OUTPUT_FILE, sep=";", index=False, encoding="utf-8-sig")
+    log(f"TXT final generado: {TEXT_OUTPUT_FILE}")
+    return TEXT_OUTPUT_FILE
+
+
 def save_results(records: list[dict]) -> Path:
     detail_df = results_to_dataframe(records)
     summary_df = build_summary_dataframe(records)
     summary_df["total"] = 0
     centered_alignment = Alignment(horizontal="center", vertical="center")
+    money_number_format = '#.##0,00 €'
+    integer_number_format = '#.##0'
 
     with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
         summary_df.to_excel(writer, sheet_name="Resumen", index=False)
         detail_df.to_excel(writer, sheet_name="Detalle", index=False)
 
         summary_sheet = writer.sheets["Resumen"]
+        detail_sheet = writer.sheets["Detalle"]
         summary_sheet.freeze_panes = "B2"
         summary_sheet.column_dimensions["A"].width = 24
         first_stage_column = 2
@@ -1212,27 +1289,44 @@ def save_results(records: list[dict]) -> Path:
             column_letter = summary_sheet.cell(row=1, column=column_index).column_letter
             summary_sheet.column_dimensions[column_letter].width = 22
             for row_index in range(2, summary_sheet.max_row + 1):
-                summary_sheet.cell(row=row_index, column=column_index).number_format = u'#,##0 €'
+                summary_sheet.cell(row=row_index, column=column_index).number_format = money_number_format
 
         for row_index in range(2, summary_sheet.max_row + 1):
             row_start = summary_sheet.cell(row=row_index, column=first_stage_column).coordinate
             row_end = summary_sheet.cell(row=row_index, column=last_stage_column).coordinate
             total_cell = summary_sheet.cell(row=row_index, column=total_column)
             total_cell.value = f"=SUM({row_start}:{row_end})"
-            total_cell.number_format = u'#,##0 €'
+            total_cell.number_format = money_number_format
 
         grand_total_row = summary_sheet.max_row + 1
         grand_total_start = summary_sheet.cell(row=2, column=total_column).coordinate
         grand_total_end = summary_sheet.cell(row=grand_total_row - 1, column=total_column).coordinate
         grand_total_cell = summary_sheet.cell(row=grand_total_row, column=total_column)
         grand_total_cell.value = f"=SUM({grand_total_start}:{grand_total_end})"
-        grand_total_cell.number_format = u'#,##0 €'
+        grand_total_cell.number_format = money_number_format
+
+        detail_headers = {
+            str(detail_sheet.cell(row=1, column=column_index).value).strip().lower(): column_index
+            for column_index in range(1, detail_sheet.max_column + 1)
+            if detail_sheet.cell(row=1, column=column_index).value is not None
+        }
+        precio_column = detail_headers.get("precio")
+        cantidad_column = detail_headers.get("cantidad")
+
+        if precio_column is not None:
+            for row_index in range(2, detail_sheet.max_row + 1):
+                detail_sheet.cell(row=row_index, column=precio_column).number_format = money_number_format
+
+        if cantidad_column is not None:
+            for row_index in range(2, detail_sheet.max_row + 1):
+                detail_sheet.cell(row=row_index, column=cantidad_column).number_format = integer_number_format
 
         for sheet in writer.book.worksheets:
             for row in sheet.iter_rows():
                 for cell in row:
                     cell.alignment = centered_alignment
 
+    save_text_results(detail_df)
     log(f"Excel final generado: {OUTPUT_FILE}")
     return OUTPUT_FILE
 

@@ -16,7 +16,7 @@ import pandas as pd
 from openpyxl.styles import Alignment
 from playwright.sync_api import Error, Locator, Page, TimeoutError, sync_playwright
 
-from config_utils import load_dotenv
+from config_utils import load_comerciales, load_dotenv
 from guardar_sesion_forecast import get_chrome_path, save_session, try_auto_login
 
 
@@ -28,7 +28,7 @@ SESSION_STORAGE_FILE = BASE_DIR / "sesion_forecast_session_storage.json"
 EXPORTS_DIR = BASE_DIR / "exports"
 OUTPUT_FILE = BASE_DIR / "resultado_forecast_ferniq.txt"
 
-COMERCIALES = [
+COMERCIALES = load_comerciales([
     "Ismael Serrano",
     "Javier Barcelo",
     "Jesus Cabello",
@@ -37,7 +37,7 @@ COMERCIALES = [
     "Agustin Parejo",
     "Ramón Jimenez",
     "Daniel Amparán",
-]
+])
 
 def get_current_spanish_month_year() -> str:
     spanish_months = {
@@ -92,6 +92,22 @@ COMERCIAL_ALIASES = {
     "agustin parejo": ["Agustin Parejo"],
     "ramon jimenez": ["Ramón Jimenez"],
 }
+
+
+def merge_comerciales(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+
+    for group in groups:
+        for comercial in group:
+            canonical = canonical_comercial_name(comercial)
+            normalized = normalize_text(canonical)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(canonical)
+
+    return merged
 
 
 def log(message: str) -> None:
@@ -587,14 +603,14 @@ def get_comerciales_to_process(page: Page) -> list[str]:
             normalize_text(canonical_comercial_name(comercial)): canonical_comercial_name(comercial)
             for comercial in COMERCIALES
         }
-        filtered = [
-            official_by_normalized[normalize_text(canonical_comercial_name(comercial))]
+        detected_canonical = [
+            official_by_normalized.get(
+                normalize_text(canonical_comercial_name(comercial)),
+                canonical_comercial_name(comercial),
+            )
             for comercial in detected
-            if normalize_text(canonical_comercial_name(comercial)) in official_by_normalized
         ]
-        if filtered:
-            return filtered
-        return detected
+        return merge_comerciales(detected_canonical, COMERCIALES)
     return COMERCIALES
 
 
@@ -1051,12 +1067,17 @@ def format_money(value: float | int | None) -> str:
         number = float(value)
     except (TypeError, ValueError):
         return "0,00"
-    return f"{number:.2f}".replace(".", ",")
+    integer_part, decimal_part = f"{number:,.2f}".split(".")
+    integer_part = integer_part.replace(",", ".")
+    return f"{integer_part},{decimal_part}"
 
 
 def save_results(records: list[dict]) -> Path:
-    # Inicializar un diccionario con todos los comerciales de la lista oficial en 0.00
-    forecasts = {comercial: 0.0 for comercial in COMERCIALES}
+    ordered_comerciales = merge_comerciales(
+        COMERCIALES,
+        [str(record.get("comercial") or "").strip() for record in records],
+    )
+    forecasts = {comercial: 0.0 for comercial in ordered_comerciales}
     
     # Rellenar con los valores extraídos con éxito usando normalización para el matching
     for record in records:
@@ -1069,7 +1090,7 @@ def save_results(records: list[dict]) -> Path:
         if fc is not None:
             # Buscar coincidencia normalizada en la lista de comerciales oficiales
             matched = False
-            for c_official in COMERCIALES:
+            for c_official in ordered_comerciales:
                 if normalize_text(c_official) == normalize_text(canonical):
                     try:
                         forecasts[c_official] = float(fc)

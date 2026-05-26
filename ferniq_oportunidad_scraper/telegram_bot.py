@@ -14,7 +14,14 @@ from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from config_utils import load_dotenv
-from extraer_etapa import OUTPUT_FILE, SESSION_FILE, load_results_dataframe, run_extraction_with_retry
+from extraer_etapa import (
+    COMERCIALES,
+    OUTPUT_FILE,
+    SESSION_FILE,
+    TEXT_OUTPUT_FILE,
+    load_results_dataframe,
+    run_extraction_with_retry,
+)
 
 
 ALLOWED_CHAT_IDS: set[str] = set()
@@ -98,20 +105,46 @@ def format_money(value: float | int | None) -> str:
         number = float(value)
     except (TypeError, ValueError):
         return str(value)
-    formatted = f"{number:,.2f}"
-    return f"EUR {formatted}"
+    integer_part, decimal_part = f"{number:,.2f}".split(".")
+    integer_part = integer_part.replace(",", ".")
+    return f"{integer_part},{decimal_part} €"
+
+
+def format_quantity(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    if number.is_integer():
+        return f"{int(number):,}".replace(",", ".")
+
+    integer_part, decimal_part = f"{number:,.2f}".split(".")
+    integer_part = integer_part.replace(",", ".")
+    return f"{integer_part},{decimal_part}"
 
 
 def build_summary_message(df: pd.DataFrame) -> str:
     if df.empty:
-        return "No hay filas en el Excel generado."
+        return "No hay filas en el TXT generado."
 
     lines = ["Datos de Etapa por comercial:"]
+    detected_comerciales = [
+        value
+        for value in df.get("comercial", pd.Series(dtype=str)).dropna().astype(str).tolist()
+        if value.strip()
+    ]
+    ordered_comerciales = list(dict.fromkeys([*COMERCIALES, *detected_comerciales]))
 
-    for comercial, group in df.groupby("comercial", dropna=False):
-        group = group.copy()
-        group["precio"] = pd.to_numeric(group["precio"], errors="coerce")
-        total_precio = group["precio"].sum(min_count=1)
+    for comercial in ordered_comerciales:
+        group = df[df["comercial"].astype(str) == comercial].copy()
+        if group.empty:
+            total_precio = 0.0
+        else:
+            group["precio"] = pd.to_numeric(group["precio"], errors="coerce")
+            total_precio = group["precio"].sum(min_count=1)
 
         lines.append("")
         lines.append(f"{comercial}: total {format_money(total_precio)}")
@@ -123,10 +156,7 @@ def build_summary_message(df: pd.DataFrame) -> str:
 
             cantidad_text = "-"
             if pd.notna(cantidad):
-                try:
-                    cantidad_text = str(int(cantidad))
-                except (TypeError, ValueError):
-                    cantidad_text = str(cantidad)
+                cantidad_text = format_quantity(cantidad)
 
             lines.append(
                 f"- {etapa}: cantidad {cantidad_text}, precio {format_money(precio)}"
@@ -149,14 +179,14 @@ async def ensure_authorized(update: Update) -> bool:
     return False
 
 
-async def send_excel(update: Update, excel_path: Path) -> None:
+async def send_stage_report(update: Update, report_path: Path) -> None:
     if not update.message:
         return
-    with excel_path.open("rb") as excel_file:
+    with report_path.open("rb") as report_file:
         await update.message.reply_document(
-            document=excel_file,
-            filename=excel_path.name,
-            caption="Excel generado por el scraper de Ferniq.",
+            document=report_file,
+            filename=report_path.name,
+            caption="TXT generado por el scraper de Ferniq.",
             read_timeout=120,
             write_timeout=120,
             connect_timeout=30,
@@ -179,7 +209,7 @@ async def send_report(update: Update, report_path: Path) -> None:
 
 def build_status_message() -> str:
     session_ok = "si" if SESSION_FILE.exists() else "no"
-    excel_ok = "si" if OUTPUT_FILE.exists() else "no"
+    stage_report_ok = "si" if TEXT_OUTPUT_FILE.exists() else "no"
     forecast_session_ok = "si" if FORECAST_SESSION_FILE.exists() else "no"
     forecast_report_ok = "si" if FORECAST_OUTPUT_FILE.exists() else "no"
     token_ok = "si" if os.getenv("TELEGRAM_BOT_TOKEN", "").strip() else "no"
@@ -188,7 +218,7 @@ def build_status_message() -> str:
     return (
         "Estado del bot:\n"
         f"- sesion_ferniq.json: {session_ok}\n"
-        f"- resultado_etapa_ferniq.xlsx: {excel_ok}\n"
+        f"- resultado_etapa_ferniq.txt: {stage_report_ok}\n"
         f"- sesion_forecast.json: {forecast_session_ok}\n"
         f"- resultado_forecast_ferniq.txt: {forecast_report_ok}\n"
         f"- token cargado: {token_ok}\n"
@@ -562,7 +592,7 @@ async def handle_sacar_datos(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
 
             try:
-                excel_path = await asyncio.to_thread(run_extraction_with_retry)
+                await asyncio.to_thread(run_extraction_with_retry)
                 df = await asyncio.to_thread(load_results_dataframe)
             except Exception as exc:
                 await reply_error_text(update, "Error al sacar datos", exc)
@@ -572,12 +602,14 @@ async def handle_sacar_datos(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await asyncio.gather(typing_task, waiting_task, return_exceptions=True)
 
             summary = build_summary_message(df)
-            await safe_edit_message(status_message, "Extraccion de Etapa completada. Te envio el resumen y el Excel.")
+            await safe_edit_message(status_message, "Extraccion de Etapa completada. Te envio el resumen y el TXT.")
 
             for chunk in split_message(summary):
                 await safe_reply_text(update.message, chunk)
 
-            await send_excel(update, excel_path)
+            if not TEXT_OUTPUT_FILE.exists():
+                raise FileNotFoundError(f"No existe el TXT final de Etapa: {TEXT_OUTPUT_FILE}")
+            await send_stage_report(update, TEXT_OUTPUT_FILE)
         finally:
             CURRENT_JOB_LABEL = ""
 
@@ -695,16 +727,16 @@ async def handle_estado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(build_status_message())
 
 
-async def handle_ultimo_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_ultimo_txt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not await ensure_authorized(update):
         return
 
-    if not OUTPUT_FILE.exists():
-        await update.message.reply_text("Todavia no existe ningun Excel generado.")
+    if not TEXT_OUTPUT_FILE.exists():
+        await update.message.reply_text("Todavia no existe ningun TXT generado.")
         return
 
-    await update.message.reply_text("Te envio el ultimo Excel generado.")
-    await send_excel(update, OUTPUT_FILE)
+    await update.message.reply_text("Te envio el ultimo TXT generado.")
+    await send_stage_report(update, TEXT_OUTPUT_FILE)
 
 
 async def handle_ultimo_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -733,7 +765,7 @@ async def handle_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/sacar_forecast\n"
         "/estado\n"
         "/estado_forecast\n"
-        "/ultimo_excel\n"
+        "/ultimo_txt\n"
         "/ultimo_forecast\n"
         "/ayuda\n\n"
         "Tambien puedes escribir:\n"
@@ -741,7 +773,7 @@ async def handle_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "- sacar forecast\n"
         "- estado\n"
         "- estado forecast\n"
-        "- ultimo excel\n"
+        "- ultimo txt\n"
         "- ultimo forecast"
     )
 
@@ -795,8 +827,8 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if normalized in {"estado forecast", "/estado_forecast"}:
         await handle_estado(update, context)
         return
-    if normalized in {"ultimo excel", "/ultimo_excel"}:
-        await handle_ultimo_excel(update, context)
+    if normalized in {"ultimo txt", "/ultimo_txt", "ultimo excel", "/ultimo_excel"}:
+        await handle_ultimo_txt(update, context)
         return
     if normalized in {"ultimo forecast", "ultimo excel forecast", "/ultimo_forecast"}:
         await handle_ultimo_forecast(update, context)
@@ -811,11 +843,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def post_init(application: Application) -> None:
     commands = [
         BotCommand("start", "Abrir el bot"),
-        BotCommand("sacar_datos", "Extraer datos de Etapa y generar el Excel"),
+        BotCommand("sacar_datos", "Extraer datos de Etapa y generar el TXT"),
         BotCommand("sacar_forecast", "Extraer datos de Forecast"),
         BotCommand("estado", "Ver estado general del bot"),
         BotCommand("estado_forecast", "Ver estado general del bot"),
-        BotCommand("ultimo_excel", "Recibir el ultimo Excel de Etapa"),
+        BotCommand("ultimo_txt", "Recibir el ultimo TXT de Etapa"),
         BotCommand("ultimo_forecast", "Recibir el ultimo reporte de Forecast"),
         BotCommand("ayuda", "Ver ayuda y comandos disponibles"),
     ]
@@ -854,7 +886,8 @@ def main() -> None:
     application.add_handler(CommandHandler("sacar_forecast", handle_sacar_forecast))
     application.add_handler(CommandHandler("estado", handle_estado))
     application.add_handler(CommandHandler("estado_forecast", handle_estado))
-    application.add_handler(CommandHandler("ultimo_excel", handle_ultimo_excel))
+    application.add_handler(CommandHandler("ultimo_txt", handle_ultimo_txt))
+    application.add_handler(CommandHandler("ultimo_excel", handle_ultimo_txt))
     application.add_handler(CommandHandler("ultimo_forecast", handle_ultimo_forecast))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
     print("Bot de Telegram iniciado.")
