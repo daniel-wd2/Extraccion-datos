@@ -1241,24 +1241,17 @@ def format_spanish_number(
     return f"{integer_part},{decimal_part}{suffix}"
 
 
-def save_text_results(detail_df: pd.DataFrame) -> Path:
-    export_df = detail_df.copy()
+def save_text_results(summary_df: pd.DataFrame) -> Path:
+    export_df = summary_df.copy()
 
-    if "cantidad" in export_df.columns:
-        export_df["cantidad"] = export_df["cantidad"].apply(
-            lambda value: format_spanish_number(value, decimals=0)
-        )
+    ordered_columns = ["comercial", *STAGE_NAMES]
+    export_df = export_df.reindex(columns=ordered_columns)
 
-    if "valor_texto" in export_df.columns:
-        export_df["valor_texto"] = export_df["valor_texto"].apply(limpiar_precio)
-        export_df["valor_texto"] = export_df["valor_texto"].apply(
-            lambda value: format_spanish_number(value, decimals=2, suffix=" €")
-        )
-
-    if "precio" in export_df.columns:
-        export_df["precio"] = export_df["precio"].apply(
-            lambda value: format_spanish_number(value, decimals=2)
-        )
+    for column in STAGE_NAMES:
+        if column in export_df.columns:
+            export_df[column] = export_df[column].apply(
+                lambda value: format_spanish_number(value, decimals=2)
+            )
 
     export_df.to_csv(TEXT_OUTPUT_FILE, sep=";", index=False, encoding="utf-8-sig")
     log(f"TXT final generado: {TEXT_OUTPUT_FILE}")
@@ -1326,7 +1319,7 @@ def save_results(records: list[dict]) -> Path:
                 for cell in row:
                     cell.alignment = centered_alignment
 
-    save_text_results(detail_df)
+    save_text_results(summary_df)
     log(f"Excel final generado: {OUTPUT_FILE}")
     return OUTPUT_FILE
 
